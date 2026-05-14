@@ -1,5 +1,6 @@
 pandas
+openpyxl
 streamlit
 streamlit-authenticator==0.3.1
-openpyxl
 Pillow
+pytz
