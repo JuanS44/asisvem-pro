@@ -4,7 +4,7 @@ import streamlit_authenticator as stauth
 from datetime import datetime, timedelta
 import os
 import urllib.parse
-import pytz  # Para la zona horaria
+import pytz 
 
 # 1. CONFIGURACIÓN VISUAL
 st.set_page_config(page_title="Asisvem PRO", layout="wide", page_icon="🏢")
@@ -53,7 +53,6 @@ if st.session_state["authentication_status"]:
     HISTORIAL_FILE = f"historial_{user_id}.csv" 
     MSG_FILE = f"mensaje_{user_id}.txt"
     
-    # Cargar mensaje guardado
     if not os.path.exists(MSG_FILE):
         with open(MSG_FILE, "w", encoding="utf-8") as f: f.write("Hola {nombre}, recordarte que tu {detalle} para {referencia} vence el {fecha}.")
     
@@ -74,17 +73,19 @@ if st.session_state["authentication_status"]:
         
         uploaded_file = st.file_uploader("1. Cargar Base Excel (.xlsx)", type=["xlsx"])
         
-        # NUEVO: CARGAR RESPALDO CSV
-        restore_file = st.file_uploader("2. Cargar Respaldo Historial (Opcional)", type=["csv"])
+        # PROCESO DE RESPALDO (Sin bucles infinitos)
+        restore_file = st.file_uploader("2. Cargar Respaldo Historial (.csv)", type=["csv"])
         if restore_file:
-            respaldo = pd.read_csv(restore_file)
-            respaldo.to_csv(HISTORIAL_FILE, index=False)
-            st.success("Historial recuperado")
+            if "last_loaded_restore" not in st.session_state or st.session_state.last_loaded_restore != restore_file.name:
+                df_restore = pd.read_csv(restore_file)
+                df_restore.to_csv(HISTORIAL_FILE, index=False)
+                st.session_state.last_loaded_restore = restore_file.name
+                st.success("✅ Historial Cargado")
+                st.rerun()
             
         dias_margen = st.slider("Días de anticipación", 1, 60, 8)
         st.divider()
         
-        # NUEVO: BOTÓN DESCARGAR RESPALDO
         hist_actual = leer_historial(HISTORIAL_FILE)
         if not hist_actual.empty:
             csv_data = hist_actual.to_csv(index=False).encode('utf-8')
@@ -94,8 +95,9 @@ if st.session_state["authentication_status"]:
             st.dataframe(hist_actual, hide_index=True)
             
         st.markdown("<br>" * 2, unsafe_allow_html=True)
-        st.caption("**Soporte Técnico**")
-        st.caption("gerencia@asisvem.com")
+        # --- LOGO ASISVEM ---
+        st.image("Logo Asisvem 2022 PNG (1).png", width=120)
+        st.caption("**Soporte Técnico** | gerencia@asisvem.com")
 
     # --- PESTAÑAS PRINCIPALES ---
     tabs_principales = st.tabs(["📖 Configuración", "🔔 Gestión de Alertas", "✅ Gestionados"])
@@ -105,10 +107,23 @@ if st.session_state["authentication_status"]:
         with col_m:
             st.header("📘 Instrucciones Rápidas")
             st.markdown("""
-            1. Sube tu **Excel** con las columnas: Nombre, Celular, Fecha, Referencia, Detalle.
-            2. Usa **WhatsApp** para avisar a tus clientes.
-            3. Haz clic en **Marcar ✔️** para guardar la gestión.
-            4. **IMPORTANTE:** Al final del día descarga tu respaldo en la barra izquierda. Si la página se reinicia, vuelve a subir ese archivo en el paso 2 de la barra lateral.
+            1. Sube tu archivo **Excel** asegurándote de que tenga este formato exacto:
+            """)
+            
+            # --- TABLA DE FORMATO RESTAURADA ---
+            df_ejemplo = pd.DataFrame({
+                "Nombre": ["Quien recibe el mensaje", "Juan Perez"],
+                "Celular": ["A dónde llega el mensaje", "3001234567"],
+                "Fecha": ["Cuándo vence el beneficio, la cita o el producto", "2026-05-20"],
+                "Referencia": ["El objeto principal", "Placa, Carro, Pan, Libro..."],
+                "Detalle": ["El motivo del mensaje", "Mantenimiento, Descuento..."]
+            })
+            st.table(df_ejemplo)
+            
+            st.markdown("""
+            2. Usa el botón de **WhatsApp** para enviar el recordatorio automático.
+            3. Haz clic en **Marcar ✔️** para registrar la gestión y que no vuelva a aparecer en pendientes.
+            4. **IMPORTANTE:** Descarga tu respaldo al finalizar tu jornada. Si la web se reinicia, súbelo en el **Paso 2** de la barra lateral para recuperar tus datos.
             """)
             
         with col_c:
@@ -123,7 +138,7 @@ if st.session_state["authentication_status"]:
         if uploaded_file:
             df = pd.read_excel(uploaded_file)
             if not all(c in df.columns for c in ["Nombre", "Celular", "Fecha", "Referencia", "Detalle"]):
-                st.error("⚠️ Columnas incorrectas en el Excel.")
+                st.error("⚠️ Columnas incorrectas. El Excel debe tener: Nombre, Celular, Fecha, Referencia, Detalle.")
             else:
                 df["Fecha"] = pd.to_datetime(df["Fecha"], errors='coerce').dt.date
                 historial = leer_historial(HISTORIAL_FILE)
@@ -133,7 +148,7 @@ if st.session_state["authentication_status"]:
                 df_rango = df[(df["Fecha"] >= hoy) & (df["Fecha"] <= limite)]
                 gestionados_list = historial["Referencia"].astype(str).tolist()
                 
-                busq = st.text_input("🔍 Buscar cliente o referencia:").upper()
+                busq = st.text_input("🔍 Buscar cliente o placa/referencia:").upper()
                 pendientes = df_rango[~df_rango["Referencia"].astype(str).isin(gestionados_list)]
                 
                 if busq:
@@ -156,24 +171,26 @@ if st.session_state["authentication_status"]:
                         c2.link_button("🚀 WhatsApp", url, use_container_width=True)
                         
                         if c3.button("Marcar ✔️", key=f"p_{idx}", use_container_width=True):
-                            # Hora de gestión con zona horaria correcta
+                            hist_actualizar = leer_historial(HISTORIAL_FILE)
                             hora_act = datetime.now(ZONA_HORARIA).strftime("%Y-%m-%d %H:%M")
                             nueva_g = pd.DataFrame([{"Fecha_Gestion": hora_act, "Cliente": row['Nombre'], "Referencia": row['Referencia']}])
-                            pd.concat([historial, nueva_g]).to_csv(HISTORIAL_FILE, index=False)
+                            df_final = pd.concat([hist_actualizar, nueva_g])
+                            df_final.to_csv(HISTORIAL_FILE, index=False)
                             st.rerun()
         else:
             st.warning("👈 Carga un archivo Excel para comenzar.")
 
     with tabs_principales[2]:
         if uploaded_file:
-            historial = leer_historial(HISTORIAL_FILE)
-            avisados = historial[historial["Referencia"].astype(str).isin(df_rango["Referencia"].astype(str))]
+            historial_view = leer_historial(HISTORIAL_FILE)
+            avisados = historial_view[historial_view["Referencia"].astype(str).isin(df_rango["Referencia"].astype(str))]
             for idx, row in avisados.iterrows():
                 with st.container(border=True):
                     ca, cb = st.columns([4, 1])
                     ca.write(f"✅ {row['Cliente']} ({row['Referencia']})")
                     ca.caption(f"Gestionado el: {row['Fecha_Gestion']}")
                     if cb.button("Deshacer", key=f"d_{idx}"):
-                        historial = historial[historial["Referencia"].astype(str) != str(row['Referencia'])]
-                        historial.to_csv(HISTORIAL_FILE, index=False)
+                        h_edit = leer_historial(HISTORIAL_FILE)
+                        h_edit = h_edit[h_edit["Referencia"].astype(str) != str(row['Referencia'])]
+                        h_edit.to_csv(HISTORIAL_FILE, index=False)
                         st.rerun()
